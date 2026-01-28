@@ -24,3 +24,7 @@ cortex-m-rt = "0.7.5"
 
 defmt = "1.0.1"
 defmt-rtt = "1.0"
+static_cell = "2.1.1"
+libm = "0.2.16"
+fundsp = { version = "0.23.0", default-features = false }
+linked_list_allocator = "0.10.5"
