@@ -1,4 +1,5 @@
 extern crate alloc;
+use crate::arrayinit_nostd::arr;
 use alloc::boxed::Box;
 use fundsp::prelude::*;
 
@@ -15,47 +16,42 @@ const KEY_PITCHES: [f32; 7] = [
 pub const VOICE_GAIN: f32 = 0.2;
 pub const KEY_COUNT: usize = 7;
 
-pub struct Voice {
-    pub gate: bool,
-    unit: Box<dyn AudioUnit>,
-}
-
 pub struct KeyboardSynth {
-    pub voices: [Voice; KEY_COUNT],
-}
-
-impl Voice {
-    #[allow(clippy::precedence)]
-    pub fn new(frequency: f32, sample_rate: f64) -> Self {
-        // Following keys.rs pattern: pitch >> poly_saw() * gain
-        let mut unit: Box<dyn AudioUnit> =
-            Box::new(dc(frequency) >> poly_saw::<f32>() * VOICE_GAIN);
-        unit.set_sample_rate(sample_rate);
-        unit.allocate();
-        Self { gate: false, unit }
-    }
-
-    #[inline(always)]
-    pub fn get_sample(&mut self) -> f32 {
-        if self.gate { self.unit.get_mono() } else { 0.0 }
-    }
+    sr: u32,
+    net: Net,
+    freqs: [Shared; KEY_COUNT],
+    gates: [Shared; KEY_COUNT],
 }
 
 impl KeyboardSynth {
-    #[inline(always)]
     pub fn new(sample_rate: u32) -> Self {
-        let sr = sample_rate as f64;
-        Self {
-            voices: KEY_PITCHES.map(|freq| Voice::new(freq, sr)),
+        let sr = sample_rate;
+        let mut net = Net::new(0, 1);
+        let id_join = net.push(Box::new(join::<U7>()));
+        let freqs = arr![|i| Shared::new(KEY_PITCHES[i])];
+        let gates = arr![|_| Shared::new(0.0)];
+        net.pipe_output(id_join);
+        for i in 0..KEY_COUNT {
+            let id = net.push(Box::new(
+                var(&freqs[i]) >> (poly_saw::<f32>() * var(&gates[i]) * VOICE_GAIN),
+            ));
+            net.pipe_input(id);
+            net.connect(id, 0, id_join, i);
         }
+        Self {
+            sr,
+            net,
+            freqs,
+            gates,
+        }
+    }
+
+    pub fn set_gate(&mut self, i: usize, val: f32) {
+        self.gates[i].set_value(val);
     }
 
     #[inline(always)]
     pub fn get_sample(&mut self) -> f32 {
-        let mut output = 0.0;
-        for voice in self.voices.iter_mut() {
-            output += voice.get_sample();
-        }
-        output
+        self.net.get_mono()
     }
 }

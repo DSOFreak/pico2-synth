@@ -21,8 +21,7 @@ use linked_list_allocator::LockedHeap;
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 const HEAP_SIZE: usize = 32 * 1024;
-static mut HEAP: [mem::MaybeUninit<u8>; HEAP_SIZE] =
-    [mem::MaybeUninit::uninit(); HEAP_SIZE];
+static mut HEAP: [mem::MaybeUninit<u8>; HEAP_SIZE] = [mem::MaybeUninit::uninit(); HEAP_SIZE];
 
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::Input;
@@ -32,6 +31,7 @@ use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
+mod arrayinit_nostd;
 mod keyboard;
 
 bind_interrupts!(struct Irqs {
@@ -68,7 +68,9 @@ async fn main(_spawner: Spawner) {
     let input5 = Input::new(p.PIN_5, embassy_rp::gpio::Pull::Up);
     let input6 = Input::new(p.PIN_6, embassy_rp::gpio::Pull::Up);
 
-    let inputs = [&input0, &input1, &input2, &input3, &input4, &input5, &input6];
+    let inputs = [
+        &input0, &input1, &input2, &input3, &input4, &input5, &input6,
+    ];
 
     let mut synth = keyboard::KeyboardSynth::new(SAMPLE_RATE);
 
@@ -109,7 +111,7 @@ async fn main(_spawner: Spawner) {
             last_poll = Instant::now();
             let mut i = 0;
             while i < keyboard::KEY_COUNT {
-                synth.voices[i].gate = inputs[i].is_low();
+                synth.set_gate(i, if inputs[i].is_low() { 1.0 } else { 0.0 });
                 i += 1;
             }
         }
