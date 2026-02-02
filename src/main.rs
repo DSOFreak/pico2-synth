@@ -20,7 +20,7 @@ use linked_list_allocator::LockedHeap;
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-const HEAP_SIZE: usize = 32 * 1024;
+const HEAP_SIZE: usize = 384 * 1024;
 static mut HEAP: [mem::MaybeUninit<u8>; HEAP_SIZE] = [mem::MaybeUninit::uninit(); HEAP_SIZE];
 
 use embassy_rp::bind_interrupts;
@@ -38,7 +38,7 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
-const SAMPLE_RATE: u32 = 48_000;
+const SAMPLE_RATE: u32 = 44_100;
 const BIT_DEPTH: u32 = 16;
 
 #[embassy_executor::main]
@@ -89,7 +89,7 @@ async fn main(_spawner: Spawner) {
 
     // create two audio buffers (back and front) which will take turns being
     // filled with new audio data and being sent to the pio fifo using dma
-    const BUFFER_SIZE: usize = 960;
+    const BUFFER_SIZE: usize = 480;
     static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
     let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
     let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
@@ -126,7 +126,7 @@ async fn main(_spawner: Spawner) {
         busy_pin.set_low();
 
         // now await the dma future. once the dma finishes, the next buffer needs to be queued
-        // within DMA_DEPTH / SAMPLE_RATE = 8 / 48000 seconds = 166us
+        // within DMA_DEPTH / SAMPLE_RATE - seconds
         dma_future.await;
         mem::swap(&mut back_buffer, &mut front_buffer);
     }
