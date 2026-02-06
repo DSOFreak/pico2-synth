@@ -67,12 +67,14 @@ async fn main(_spawner: Spawner) {
     let input4 = Input::new(p.PIN_4, embassy_rp::gpio::Pull::Up);
     let input5 = Input::new(p.PIN_5, embassy_rp::gpio::Pull::Up);
     let input6 = Input::new(p.PIN_6, embassy_rp::gpio::Pull::Up);
+    let input7 = Input::new(p.PIN_7, embassy_rp::gpio::Pull::Up);
+    let input8 = Input::new(p.PIN_8, embassy_rp::gpio::Pull::Up);
 
-    let inputs = [
-        &input0, &input1, &input2, &input3, &input4, &input5, &input6,
+    let inputs: [&Input<'_>; keyboard::KEY_COUNT] = [
+        &input0, &input1, &input2, &input3, &input4, &input5, &input6, &input7, &input8,
     ];
 
-    let mut synth = keyboard::KeyboardSynth::new(SAMPLE_RATE);
+    let mut synth = keyboard::KeyboardSynth::new();
 
     let program = PioI2sOutProgram::new(&mut common);
     let mut i2s = PioI2sOut::new(
@@ -109,11 +111,7 @@ async fn main(_spawner: Spawner) {
         // Poll the keyboard inputs at 50Hz (every 20ms)
         if last_poll.elapsed() >= POLL_INTERVAL {
             last_poll = Instant::now();
-            let mut i = 0;
-            while i < keyboard::KEY_COUNT {
-                synth.set_gate(i, if inputs[i].is_low() { 1.0 } else { 0.0 });
-                i += 1;
-            }
+            synth.poll(|i| inputs[i].is_low());
         }
 
         // fill back buffer with fresh audio samples before awaiting the dma future
