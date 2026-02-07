@@ -60,6 +60,7 @@ async fn main(_spawner: Spawner) {
 
     let mut busy_pin = embassy_rp::gpio::Output::new(p.PIN_16, embassy_rp::gpio::Level::Low);
 
+    // 12 keys for full chromatic octave (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
     let input0 = Input::new(p.PIN_0, embassy_rp::gpio::Pull::Up);
     let input1 = Input::new(p.PIN_1, embassy_rp::gpio::Pull::Up);
     let input2 = Input::new(p.PIN_2, embassy_rp::gpio::Pull::Up);
@@ -69,10 +70,20 @@ async fn main(_spawner: Spawner) {
     let input6 = Input::new(p.PIN_6, embassy_rp::gpio::Pull::Up);
     let input7 = Input::new(p.PIN_7, embassy_rp::gpio::Pull::Up);
     let input8 = Input::new(p.PIN_8, embassy_rp::gpio::Pull::Up);
+    let input9 = Input::new(p.PIN_9, embassy_rp::gpio::Pull::Up);
+    let input10 = Input::new(p.PIN_10, embassy_rp::gpio::Pull::Up);
+    let input11 = Input::new(p.PIN_11, embassy_rp::gpio::Pull::Up);
 
     let inputs: [&Input<'_>; keyboard::KEY_COUNT] = [
-        &input0, &input1, &input2, &input3, &input4, &input5, &input6, &input7, &input8,
+        &input0, &input1, &input2, &input3, &input4, &input5, 
+        &input6, &input7, &input8, &input9, &input10, &input11,
     ];
+    
+    // 4 octave select outputs (only one LOW at a time to enable that octave)
+    let mut octave0_en = embassy_rp::gpio::Output::new(p.PIN_12, embassy_rp::gpio::Level::High);
+    let mut octave1_en = embassy_rp::gpio::Output::new(p.PIN_13, embassy_rp::gpio::Level::High);
+    let mut octave2_en = embassy_rp::gpio::Output::new(p.PIN_14, embassy_rp::gpio::Level::High);
+    let mut octave3_en = embassy_rp::gpio::Output::new(p.PIN_15, embassy_rp::gpio::Level::High);
 
     let mut synth = keyboard::KeyboardSynth::new();
 
@@ -98,8 +109,9 @@ async fn main(_spawner: Spawner) {
 
     // start pio state machine
     use embassy_time::Instant;
-    let mut last_poll = Instant::now();
-    const POLL_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_millis(20);
+    let mut last_scan = Instant::now();
+    // Scan at ~1kHz to properly read all 48 keys (12 keys × 4 octaves)
+    const SCAN_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_micros(250);
 
     loop {
         // trigger transfer of front buffer data to the pio fifo
@@ -108,10 +120,38 @@ async fn main(_spawner: Spawner) {
 
         busy_pin.set_high();
 
-        // Poll the keyboard inputs at 50Hz (every 20ms)
-        if last_poll.elapsed() >= POLL_INTERVAL {
-            last_poll = Instant::now();
-            synth.poll(|i| inputs[i].is_low());
+        // Scan the keyboard matrix at ~1kHz
+        // Each scan cycles through all 4 octaves
+        if last_scan.elapsed() >= SCAN_INTERVAL {
+            last_scan = Instant::now();
+            
+            // Scan all 4 octaves
+            // For each octave: enable it (set output LOW), read 12 keys, disable it (set HIGH)
+            for octave in 0..keyboard::OCTAVE_COUNT as u8 {
+                // Enable this octave
+                match octave {
+                    0 => octave0_en.set_low(),
+                    1 => octave1_en.set_low(),
+                    2 => octave2_en.set_low(),
+                    3 => octave3_en.set_low(),
+                    _ => {}
+                }
+                
+                // Read all 12 keys for this octave
+                for key in 0..keyboard::KEY_COUNT {
+                    let pressed = inputs[key].is_low();
+                    synth.update_key(key, octave, pressed);
+                }
+                
+                // Disable this octave
+                match octave {
+                    0 => octave0_en.set_high(),
+                    1 => octave1_en.set_high(),
+                    2 => octave2_en.set_high(),
+                    3 => octave3_en.set_high(),
+                    _ => {}
+                }
+            }
         }
 
         // fill back buffer with fresh audio samples before awaiting the dma future
