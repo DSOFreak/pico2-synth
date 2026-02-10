@@ -50,16 +50,33 @@ bind_interrupts!(struct Irqs {
 const SAMPLE_RATE: u32 = 44_100;
 const BIT_DEPTH: u32 = 16;
 
-// Task to handle VL53L0X interrupts via async GPIO
+// Task to handle VL53L0X interrupts via async GPIO and control pitch bend
+// Distance range: 50mm to 400mm maps to pitch bend -1.0 to 1.0 (±1 semitone)
 #[embassy_executor::task]
-async fn sensor_task(mut tof: VL53L0x<I2c<'static, I2C1, Async>>, mut int_pin: Input<'static>) {
+async fn sensor_task(
+    mut tof: VL53L0x<I2c<'static, I2C1, Async>>,
+    mut int_pin: Input<'static>,
+    pitch_bend: fundsp::shared::Shared,
+) {
+    const MIN_DIST: u16 = 50;   // mm
+    const MAX_DIST: u16 = 400;  // mm
+    
     loop {
         // Wait for falling edge on GPIO1 (measurement ready)
         int_pin.wait_for_falling_edge().await;
 
-        // Read and print distance
+        // Read distance and update pitch bend
         match tof.read_range_continuous_millimeters() {
-            Ok(distance) => defmt::info!("VL53L0X: {} mm", distance),
+            Ok(distance) => {
+                defmt::info!("VL53L0X: {} mm", distance);
+                
+                // Map distance to pitch bend: 50mm -> -1.0, 400mm -> 1.0
+                let clamped = distance.clamp(MIN_DIST, MAX_DIST);
+                let normalized = (clamped - MIN_DIST) as f32 / (MAX_DIST - MIN_DIST) as f32;
+                let bend = normalized * 2.0 - 1.0; // Map 0..1 to -1..1
+                
+                pitch_bend.set_value(1.0 + bend * 0.057762265); // Apply pitch bend ratio
+            }
             Err(_) => defmt::warn!("VL53L0X read failed"),
         }
     }
@@ -98,8 +115,11 @@ async fn main(_spawner: Spawner) {
     let tof_int_pin = Input::new(p.PIN_22, Pull::Up);
     defmt::info!("VL53L0X interrupt on GP22");
 
-    // Spawn sensor interrupt handler task
-    _spawner.spawn(sensor_task(tof, tof_int_pin)).unwrap();
+    let mut synth = keyboard::KeyboardSynth::new();
+    let pitch_bend_ctrl = synth.pitch_bend_control();
+
+    // Spawn sensor interrupt handler task with pitch bend control
+    _spawner.spawn(sensor_task(tof, tof_int_pin, pitch_bend_ctrl)).unwrap();
 
     // Setup pio state machine for i2s output
     let Pio {
@@ -136,8 +156,6 @@ async fn main(_spawner: Spawner) {
     let mut octave1_en = embassy_rp::gpio::Output::new(p.PIN_13, embassy_rp::gpio::Level::High);
     let mut octave2_en = embassy_rp::gpio::Output::new(p.PIN_14, embassy_rp::gpio::Level::High);
     let mut octave3_en = embassy_rp::gpio::Output::new(p.PIN_15, embassy_rp::gpio::Level::High);
-
-    let mut synth = keyboard::KeyboardSynth::new();
 
     let program = PioI2sOutProgram::new(&mut common);
     let mut i2s = PioI2sOut::new(

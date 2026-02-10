@@ -231,4 +231,10 @@ impl KeyboardSynth {
         let ratio = 1.0 + bend * BEND_FACTOR;
         self.pitch_bend.set_value(ratio);
     }
+
+    /// Get a clone of the pitch bend Shared for external control
+    #[inline]
+    pub fn pitch_bend_control(&self) -> Shared {
+        self.pitch_bend.clone()
+    }
 }
