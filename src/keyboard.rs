@@ -28,6 +28,7 @@ pub const CHORUS_MOD_FREQ: f32 = 0.7;
 
 pub const DELAY_TIME: f64 = 0.1;
 pub const DELAY_FEEDBACK: f32 = 0.9;
+pub const LP_CUTOFF: f32 = 1500.0;
 
 /// Voice unassigned marker
 const VOICE_UNASSIGNED: u8 = u8::MAX;
@@ -88,6 +89,7 @@ pub struct KeyboardSynth {
     next_voice: usize,
     /// Previous key states for edge detection (per octave)
     key_states: [[bool; KEY_COUNT]; OCTAVE_COUNT],
+    pitch_bend: Shared,
 }
 
 impl KeyboardSynth {
@@ -95,51 +97,51 @@ impl KeyboardSynth {
     pub fn new() -> Self {
         let freqs = arr![|_| Shared::new(0.0)];
         let gates = arr![|_| Shared::new(0.0)];
-
+        let pitch_bend = Shared::new(1.0);
         let net = Box::new(
-            (var(&freqs[0])
+            (var(&freqs[0]) * var(&pitch_bend)
                 >> (poly_saw::<f32>()
                     * (var(&gates[0])
                         >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                     * VOICE_GAIN)
-                | var(&freqs[1])
+                | var(&freqs[1]) * var(&pitch_bend)
                     >> (poly_saw::<f32>()
                         * (var(&gates[1])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[2])
+                | var(&freqs[2]) * var(&pitch_bend)
                     >> (poly_saw::<f32>()
                         * (var(&gates[2])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[3])
+                | var(&freqs[3]) * var(&pitch_bend)
                     >> (poly_saw::<f32>()
                         * (var(&gates[3])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[4])
+                | var(&freqs[4]) * var(&pitch_bend)
                     >> (poly_saw::<f32>()
                         * (var(&gates[4])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[5])
+                | var(&freqs[5]) * var(&pitch_bend)
                     >> (poly_saw::<f32>()
                         * (var(&gates[5])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[6])
+                | var(&freqs[6]) * var(&pitch_bend)
                     >> (poly_saw::<f32>()
                         * (var(&gates[6])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN))
                 >> join::<U7>()
+                >> lowpole_hz(LP_CUTOFF)
                 >> chorus(
                     CHORUS_SEED,
                     CHORUS_SEPARATION,
                     CHORUS_VARIATION,
                     CHORUS_MOD_FREQ,
-                )
-                >> (pass() & feedback(delay(DELAY_TIME) * DELAY_FEEDBACK)),
+                ), //>> (pass() & feedback(delay(DELAY_TIME) * DELAY_FEEDBACK)),
         );
 
         Self {
@@ -149,6 +151,7 @@ impl KeyboardSynth {
             voice_note: [VOICE_UNASSIGNED; VOICE_COUNT],
             next_voice: 0,
             key_states: [[false; KEY_COUNT]; OCTAVE_COUNT],
+            pitch_bend,
         }
     }
 
@@ -203,7 +206,6 @@ impl KeyboardSynth {
             }
         }
     }
-
     /// Allocate a voice to a note and trigger the envelope.
     #[inline(always)]
     fn allocate_voice(&mut self, voice: usize, note: u8, key: usize, octave_mult: u8) {
@@ -217,5 +219,16 @@ impl KeyboardSynth {
     #[inline(always)]
     pub fn get_sample(&mut self) -> f32 {
         self.net.get_mono()
+    }
+
+    /// Set pitch bend. Input range: -1.0 (1 semitone down) to 1.0 (1 semitone up).
+    /// Uses cheap linear approximation: ratio ≈ 1 + bend * ln(2)/12
+    #[inline]
+    pub fn set_pitch_bend(&self, bend: f32) {
+        assert!(bend >= -1.0 && bend <= 1.0, "Pitch bend out of range");
+        // ln(2)/12 ≈ 0.05776, gives ~0.16% max error for ±1 semitone
+        const BEND_FACTOR: f32 = 0.057762265;
+        let ratio = 1.0 + bend * BEND_FACTOR;
+        self.pitch_bend.set_value(ratio);
     }
 }
