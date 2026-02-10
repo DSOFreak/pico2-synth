@@ -29,8 +29,8 @@ const HEAP_SIZE: usize = 384 * 1024;
 static mut HEAP: [mem::MaybeUninit<u8>; HEAP_SIZE] = [mem::MaybeUninit::uninit(); HEAP_SIZE];
 
 use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::Input;
-use embassy_rp::i2c::{I2c, InterruptHandler as I2cInterruptHandler};
+use embassy_rp::gpio::{Input, Pull};
+use embassy_rp::i2c::{Async, I2c, InterruptHandler as I2cInterruptHandler};
 use embassy_rp::peripherals::{I2C1, PIO0};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
@@ -49,6 +49,21 @@ bind_interrupts!(struct Irqs {
 
 const SAMPLE_RATE: u32 = 44_100;
 const BIT_DEPTH: u32 = 16;
+
+// Task to handle VL53L0X interrupts via async GPIO
+#[embassy_executor::task]
+async fn sensor_task(mut tof: VL53L0x<I2c<'static, I2C1, Async>>, mut int_pin: Input<'static>) {
+    loop {
+        // Wait for falling edge on GPIO1 (measurement ready)
+        int_pin.wait_for_falling_edge().await;
+
+        // Read and print distance
+        match tof.read_range_continuous_millimeters() {
+            Ok(distance) => defmt::info!("VL53L0X: {} mm", distance),
+            Err(_) => defmt::warn!("VL53L0X read failed"),
+        }
+    }
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -78,6 +93,13 @@ async fn main(_spawner: Spawner) {
     // Start continuous mode
     tof.start_continuous(0)
         .expect("Failed to start continuous mode");
+
+    // Configure GP22 as input for VL53L0X GPIO1 (async interrupt)
+    let tof_int_pin = Input::new(p.PIN_22, Pull::Up);
+    defmt::info!("VL53L0X interrupt on GP22");
+
+    // Spawn sensor interrupt handler task
+    _spawner.spawn(sensor_task(tof, tof_int_pin)).unwrap();
 
     // Setup pio state machine for i2s output
     let Pio {
@@ -142,10 +164,6 @@ async fn main(_spawner: Spawner) {
     let mut last_scan = Instant::now();
     // Scan at ~1kHz to properly read all 48 keys (12 keys × 4 octaves)
     const SCAN_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_micros(250);
-    
-    // Timer for VL53L0X sensor readings (every 0.1 seconds)
-    let mut last_tof_read = Instant::now();
-    const TOF_READ_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_millis(100);
 
     loop {
         // trigger transfer of front buffer data to the pio fifo
@@ -184,15 +202,6 @@ async fn main(_spawner: Spawner) {
                     2 => octave2_en.set_high(),
                     3 => octave3_en.set_high(),
                     _ => {}
-                }
-            }
-            
-            // Read VL53L0X sensor every 0.1 seconds
-            if last_tof_read.elapsed() >= TOF_READ_INTERVAL {
-                last_tof_read = Instant::now();
-                match tof.read_range_continuous_millimeters() {
-                    Ok(distance) => defmt::info!("VL53L0X distance: {} mm", distance),
-                    Err(_) => defmt::warn!("Failed to read VL53L0X"),
                 }
             }
         }
