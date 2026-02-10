@@ -86,8 +86,8 @@ async fn main(_spawner: Spawner) {
     let mut tof = VL53L0x::new(i2c).expect("VL53L0X initialization failed");
     defmt::info!("VL53L0X sensor initialized successfully");
 
-    // Configure sensor timing (200ms budget for better accuracy)
-    tof.set_measurement_timing_budget(200000)
+    // Configure sensor for high speed mode (20ms timing budget)
+    tof.set_measurement_timing_budget(20000)
         .expect("Failed to set timing budget");
 
     // Start continuous mode
