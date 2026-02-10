@@ -5,6 +5,11 @@
 //!   bclk : GPIO 18
 //!   lrc  : GPIO 19
 //!   din  : GPIO 20
+//!
+//! I2C device (vl53l0x) connected to:
+//!   sda  : GPIO 26
+//!   scl  : GPIO 27
+//!
 //! Then hold down the boot select button to trigger a rising triangle waveform.
 
 #![no_std]
@@ -25,17 +30,21 @@ static mut HEAP: [mem::MaybeUninit<u8>; HEAP_SIZE] = [mem::MaybeUninit::uninit()
 
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::Input;
-use embassy_rp::peripherals::PIO0;
-use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::i2c::{I2c, InterruptHandler as I2cInterruptHandler};
+use embassy_rp::peripherals::{I2C1, PIO0};
+use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::pio_programs::i2s::{PioI2sOut, PioI2sOutProgram};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+use vl53l0x::VL53L0x;
 
 mod arrayinit_nostd;
 mod keyboard;
 
 bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
+    I2C1_IRQ => I2cInterruptHandler<I2C1>;
 });
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -48,6 +57,27 @@ async fn main(_spawner: Spawner) {
     unsafe {
         ALLOCATOR.lock().init_from_slice(&mut HEAP);
     }
+
+    // Setup I2C1 for vl53l0x on GPIO 26 (SDA) and GPIO 27 (SCL)
+    let i2c = I2c::new_async(
+        p.I2C1,
+        p.PIN_27,
+        p.PIN_26,
+        Irqs,
+        embassy_rp::i2c::Config::default(),
+    );
+
+    // Initialize vl53l0x time-of-flight sensor
+    let mut tof = VL53L0x::new(i2c).expect("VL53L0X initialization failed");
+    defmt::info!("VL53L0X sensor initialized successfully");
+
+    // Configure sensor timing (200ms budget for better accuracy)
+    tof.set_measurement_timing_budget(200000)
+        .expect("Failed to set timing budget");
+
+    // Start continuous mode
+    tof.start_continuous(0)
+        .expect("Failed to start continuous mode");
 
     // Setup pio state machine for i2s output
     let Pio {
@@ -75,10 +105,10 @@ async fn main(_spawner: Spawner) {
     let input11 = Input::new(p.PIN_11, embassy_rp::gpio::Pull::Up);
 
     let inputs: [&Input<'_>; keyboard::KEY_COUNT] = [
-        &input0, &input1, &input2, &input3, &input4, &input5, 
-        &input6, &input7, &input8, &input9, &input10, &input11,
+        &input0, &input1, &input2, &input3, &input4, &input5, &input6, &input7, &input8, &input9,
+        &input10, &input11,
     ];
-    
+
     // 4 octave select outputs (only one LOW at a time to enable that octave)
     let mut octave0_en = embassy_rp::gpio::Output::new(p.PIN_12, embassy_rp::gpio::Level::High);
     let mut octave1_en = embassy_rp::gpio::Output::new(p.PIN_13, embassy_rp::gpio::Level::High);
@@ -112,6 +142,10 @@ async fn main(_spawner: Spawner) {
     let mut last_scan = Instant::now();
     // Scan at ~1kHz to properly read all 48 keys (12 keys × 4 octaves)
     const SCAN_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_micros(250);
+    
+    // Timer for VL53L0X sensor readings (every 0.1 seconds)
+    let mut last_tof_read = Instant::now();
+    const TOF_READ_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_millis(100);
 
     loop {
         // trigger transfer of front buffer data to the pio fifo
@@ -124,7 +158,7 @@ async fn main(_spawner: Spawner) {
         // Each scan cycles through all 4 octaves
         if last_scan.elapsed() >= SCAN_INTERVAL {
             last_scan = Instant::now();
-            
+
             // Scan all 4 octaves
             // For each octave: enable it (set output LOW), read 12 keys, disable it (set HIGH)
             for octave in 0..keyboard::OCTAVE_COUNT as u8 {
@@ -136,13 +170,13 @@ async fn main(_spawner: Spawner) {
                     3 => octave3_en.set_low(),
                     _ => {}
                 }
-                
+
                 // Read all 12 keys for this octave
                 for key in 0..keyboard::KEY_COUNT {
                     let pressed = inputs[key].is_low();
                     synth.update_key(key, octave, pressed);
                 }
-                
+
                 // Disable this octave
                 match octave {
                     0 => octave0_en.set_high(),
@@ -150,6 +184,15 @@ async fn main(_spawner: Spawner) {
                     2 => octave2_en.set_high(),
                     3 => octave3_en.set_high(),
                     _ => {}
+                }
+            }
+            
+            // Read VL53L0X sensor every 0.1 seconds
+            if last_tof_read.elapsed() >= TOF_READ_INTERVAL {
+                last_tof_read = Instant::now();
+                match tof.read_range_continuous_millimeters() {
+                    Ok(distance) => defmt::info!("VL53L0X distance: {} mm", distance),
+                    Err(_) => defmt::warn!("Failed to read VL53L0X"),
                 }
             }
         }
