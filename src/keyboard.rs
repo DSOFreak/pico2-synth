@@ -18,7 +18,7 @@ pub const OCTAVE_COUNT: usize = 4;
 
 pub const ENV_ATTACK: f32 = 0.5;
 pub const ENV_DECAY: f32 = 0.5;
-pub const ENV_SUSTAIN: f32 = 0.05;
+pub const ENV_SUSTAIN: f32 = 0.5;
 pub const ENV_RELEASE: f32 = 0.5;
 
 pub const CHORUS_SEED: u64 = 1234;
