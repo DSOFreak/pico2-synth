@@ -138,14 +138,8 @@ impl KeyboardSynth {
                         * VOICE_GAIN))
                 >> join::<U7>()
                 >> lowpole_hz(LP_CUTOFF)
-                >> (pass() | var(&resonator_freq) | dc(0.8))
-                >> resonator::<f32>(), //   >> chorus(
-                                       //       CHORUS_SEED,
-                                       //       CHORUS_SEPARATION,
-                                       //       CHORUS_VARIATION,
-                                       //       CHORUS_MOD_FREQ,
-                                       //   ),
-                                       //>> (pass() & feedback(delay(DELAY_TIME) * DELAY_FEEDBACK)),
+                >> (pass() | var(&resonator_freq) | dc(2.0))
+                >> peak::<f32>(), // Efficient peaking filter (Q=2.0)
         );
 
         Self {
