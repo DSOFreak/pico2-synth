@@ -223,9 +223,14 @@ async fn main(_spawner: Spawner) {
             }
         }
 
-        // fill back buffer with fresh audio samples before awaiting the dma future
-        for s in back_buffer.iter_mut() {
-            let sample = (synth.get_sample() * 32767.0) as i16;
+        // fill back buffer with fresh audio samples using efficient block processing
+        // Process BUFFER_SIZE samples in blocks for SIMD acceleration
+        let mut audio_block: [f32; BUFFER_SIZE] = [0.0; BUFFER_SIZE];
+        synth.process_block(&mut audio_block, BUFFER_SIZE);
+        
+        // Convert f32 samples to DMA format (stereo u32)
+        for (i, s) in back_buffer.iter_mut().enumerate() {
+            let sample = (audio_block[i] * 32767.0) as i16;
             // duplicate mono sample into lower and upper half of dma word
             *s = (sample as u16 as u32) * 0x10001;
         }

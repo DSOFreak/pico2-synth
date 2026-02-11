@@ -1,6 +1,7 @@
 extern crate alloc;
 use crate::arrayinit_nostd::arr;
 use alloc::boxed::Box;
+use fundsp::buffer::BufferArray;
 use fundsp::prelude::*;
 
 // ============================================================================
@@ -220,10 +221,35 @@ impl KeyboardSynth {
         self.gates[voice].set_value(1.0);
     }
 
-    /// Generate next audio sample.
+    /// Generate next audio sample (for single-sample processing).
     #[inline(always)]
     pub fn get_sample(&mut self) -> f32 {
         self.net.get_mono()
+    }
+
+    /// Process a block of audio samples efficiently.
+    /// Uses SIMD acceleration when available.
+    #[inline]
+    pub fn process_block(&mut self, output: &mut [f32], buffer_size: usize) {
+        // Create a mono buffer for fundsp block processing
+        let mut buffer = BufferArray::<U1>::new();
+
+        // Process in chunks of MAX_BUFFER_SIZE (64 samples) for optimal SIMD usage
+        let mut processed = 0;
+        while processed < buffer_size {
+            let chunk_size = core::cmp::min(buffer_size - processed, 64);
+
+            // Process chunk
+            self.net
+                .process(chunk_size, &BufferRef::empty(), &mut buffer.buffer_mut());
+
+            // Copy to output buffer
+            for i in 0..chunk_size {
+                output[processed + i] = buffer.at_f32(0, i);
+            }
+
+            processed += chunk_size;
+        }
     }
 
     /// Set pitch bend. Input range: -12.0 to 12.0 (semitones).
