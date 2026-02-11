@@ -90,6 +90,7 @@ pub struct KeyboardSynth {
     /// Previous key states for edge detection (per octave)
     key_states: [[bool; KEY_COUNT]; OCTAVE_COUNT],
     pitch_bend: Shared,
+    resonator_freq: Shared,
 }
 
 impl KeyboardSynth {
@@ -98,6 +99,7 @@ impl KeyboardSynth {
         let freqs = arr![|_| Shared::new(0.0)];
         let gates = arr![|_| Shared::new(0.0)];
         let pitch_bend = Shared::new(1.0);
+        let resonator_freq = Shared::new(880.0);
         let net = Box::new(
             (var(&freqs[0]) * var(&pitch_bend)
                 >> (poly_saw::<f32>()
@@ -136,12 +138,14 @@ impl KeyboardSynth {
                         * VOICE_GAIN))
                 >> join::<U7>()
                 >> lowpole_hz(LP_CUTOFF)
-                >> chorus(
-                    CHORUS_SEED,
-                    CHORUS_SEPARATION,
-                    CHORUS_VARIATION,
-                    CHORUS_MOD_FREQ,
-                ), //>> (pass() & feedback(delay(DELAY_TIME) * DELAY_FEEDBACK)),
+                >> (pass() | var(&resonator_freq) | dc(0.8))
+                >> resonator::<f32>(), //   >> chorus(
+                                       //       CHORUS_SEED,
+                                       //       CHORUS_SEPARATION,
+                                       //       CHORUS_VARIATION,
+                                       //       CHORUS_MOD_FREQ,
+                                       //   ),
+                                       //>> (pass() & feedback(delay(DELAY_TIME) * DELAY_FEEDBACK)),
         );
 
         Self {
@@ -152,6 +156,7 @@ impl KeyboardSynth {
             next_voice: 0,
             key_states: [[false; KEY_COUNT]; OCTAVE_COUNT],
             pitch_bend,
+            resonator_freq,
         }
     }
 
@@ -225,7 +230,7 @@ impl KeyboardSynth {
     /// Uses cheap linear approximation: ratio ≈ 1 + bend * ln(2)/12
     #[inline]
     pub fn set_pitch_bend(&self, bend: f32) {
-        assert!(bend >= -1.0 && bend <= 1.0, "Pitch bend out of range");
+        assert!(bend >= -12.0 && bend <= 12.0, "Pitch bend out of range");
         // ln(2)/12 ≈ 0.05776, gives ~0.16% max error for ±1 semitone
         const BEND_FACTOR: f32 = 0.057762265;
         let ratio = 1.0 + bend * BEND_FACTOR;
@@ -236,5 +241,9 @@ impl KeyboardSynth {
     #[inline]
     pub fn pitch_bend_control(&self) -> Shared {
         self.pitch_bend.clone()
+    }
+    #[inline]
+    pub fn resonator_freq_control(&self) -> Shared {
+        self.resonator_freq.clone()
     }
 }

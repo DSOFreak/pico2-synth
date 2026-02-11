@@ -18,6 +18,8 @@
 
 extern crate alloc;
 use core::mem;
+use core::ops::{Mul, Sub};
+use core::u16::MAX;
 use embassy_executor::Spawner;
 
 use linked_list_allocator::LockedHeap;
@@ -56,11 +58,11 @@ const BIT_DEPTH: u32 = 16;
 async fn sensor_task(
     mut tof: VL53L0x<I2c<'static, I2C1, Async>>,
     mut int_pin: Input<'static>,
-    pitch_bend: fundsp::shared::Shared,
+    resonator_freq: fundsp::shared::Shared,
 ) {
-    const MIN_DIST: u16 = 50;   // mm
-    const MAX_DIST: u16 = 400;  // mm
-    
+    const MIN_DIST: u16 = 30; // mm
+    const MAX_DIST: u16 = 200; // mm
+
     loop {
         // Wait for falling edge on GPIO1 (measurement ready)
         int_pin.wait_for_falling_edge().await;
@@ -69,13 +71,8 @@ async fn sensor_task(
         match tof.read_range_continuous_millimeters() {
             Ok(distance) => {
                 defmt::info!("VL53L0X: {} mm", distance);
-                
-                // Map distance to pitch bend: 50mm -> -1.0, 400mm -> 1.0
-                let clamped = distance.clamp(MIN_DIST, MAX_DIST);
-                let normalized = (clamped - MIN_DIST) as f32 / (MAX_DIST - MIN_DIST) as f32;
-                let bend = normalized * 2.0 - 1.0; // Map 0..1 to -1..1
-                
-                pitch_bend.set_value(1.0 + bend * 0.057762265); // Apply pitch bend ratio
+                resonator_freq
+                    .set_value(distance.clamp(MIN_DIST, MAX_DIST).sub(MIN_DIST).mul(4) as f32);
             }
             Err(_) => defmt::warn!("VL53L0X read failed"),
         }
@@ -116,10 +113,12 @@ async fn main(_spawner: Spawner) {
     defmt::info!("VL53L0X interrupt on GP22");
 
     let mut synth = keyboard::KeyboardSynth::new();
-    let pitch_bend_ctrl = synth.pitch_bend_control();
+    let resonator_freq = synth.resonator_freq_control();
 
     // Spawn sensor interrupt handler task with pitch bend control
-    _spawner.spawn(sensor_task(tof, tof_int_pin, pitch_bend_ctrl)).unwrap();
+    _spawner
+        .spawn(sensor_task(tof, tof_int_pin, resonator_freq))
+        .unwrap();
 
     // Setup pio state machine for i2s output
     let Pio {
