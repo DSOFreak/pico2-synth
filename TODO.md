@@ -1,5 +1,31 @@
 # TODO
 
+## PERFORMANCE OPTIMIZATIONS
+
+1. **Block Processing** (Biggest win - 5-10x speedup)
+   - Currently calling `get_mono()` 480 times per buffer (once per sample)
+   - Use `synth.net.process(BUFFER_SIZE, &input, &mut output)` for SIMD acceleration
+   - Reduces function call overhead by 480x
+
+2. **Remove Virtual Dispatch**
+   - Replace `Box<dyn AudioUnit>` with generic `An<YourSynthType>`
+   - Eliminates vtable lookups every sample
+   - Enables full compiler inlining
+
+3. **Control-Rate ADSR** (Major CPU savings)
+   - Compute envelopes at 1kHz (keyboard scan rate) instead of 44.1kHz
+   - Use linear interpolation between control points
+   - 44x reduction in envelope calculations per voice
+
+4. **Reduce Voice Count**
+   - 7 voices is overkill for simple synth
+   - Try 4 voices: less CPU, less memory, still plenty for most playing
+
+5. **Simplify Audio Chain**
+   - Current: `lowpole_hz >> peak` (two filters)
+   - Optimized: Just `peak` or just `lowpole_hz`
+   - Reduces filter overhead by 50%
+
 ## IDEAS
 
 - Add an led for each key
