@@ -140,8 +140,8 @@ impl KeyboardSynth {
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN))
                 >> join::<U7>()
-                >> lowpole_hz(LP_CUTOFF)
-                >> (pass() | var(&resonator_freq) | dc(2.0))
+                >> lowpole_hz(1200.0)
+                >> (pass() | var(&resonator_freq) | dc(1.0))
                 >> peak::<f32>(), // Efficient peaking filter (Q=2.0)
         );
 

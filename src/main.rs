@@ -61,7 +61,7 @@ async fn sensor_task(
     resonator_freq: fundsp::shared::Shared,
 ) {
     const MIN_DIST: u16 = 30; // mm
-    const MAX_DIST: u16 = 200; // mm
+    const MAX_DIST: u16 = 400; // mm
 
     loop {
         // Wait for falling edge on GPIO1 (measurement ready)
@@ -70,7 +70,10 @@ async fn sensor_task(
         // Read distance and update pitch bend
         match tof.read_range_continuous_millimeters() {
             Ok(distance) => {
-                defmt::info!("VL53L0X: {} mm", distance);
+                if distance > 1500 {
+                    continue;
+                }
+                defmt::dbg!("VL53L0X: {} mm", distance);
                 resonator_freq
                     .set_value(distance.clamp(MIN_DIST, MAX_DIST).sub(MIN_DIST).mul(4) as f32);
             }
@@ -171,7 +174,7 @@ async fn main(_spawner: Spawner) {
 
     // create two audio buffers (back and front) which will take turns being
     // filled with new audio data and being sent to the pio fifo using dma
-    const BUFFER_SIZE: usize = 480;
+    const BUFFER_SIZE: usize = 640;
     static DMA_BUFFER: StaticCell<[u32; BUFFER_SIZE * 2]> = StaticCell::new();
     let dma_buffer = DMA_BUFFER.init_with(|| [0u32; BUFFER_SIZE * 2]);
     let (mut back_buffer, mut front_buffer) = dma_buffer.split_at_mut(BUFFER_SIZE);
@@ -227,7 +230,7 @@ async fn main(_spawner: Spawner) {
         // Process BUFFER_SIZE samples in blocks for SIMD acceleration
         let mut audio_block: [f32; BUFFER_SIZE] = [0.0; BUFFER_SIZE];
         synth.process_block(&mut audio_block, BUFFER_SIZE);
-        
+
         // Convert f32 samples to DMA format (stereo u32)
         for (i, s) in back_buffer.iter_mut().enumerate() {
             let sample = (audio_block[i] * 32767.0) as i16;
