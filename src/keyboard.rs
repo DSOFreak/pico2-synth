@@ -85,6 +85,8 @@ pub struct KeyboardSynth {
     gates: [Shared; VOICE_COUNT],
     /// Maps voice index -> encoded note (key + octave), or VOICE_UNASSIGNED
     voice_note: [u8; VOICE_COUNT],
+    /// Base frequencies for each voice (without pitch bend applied)
+    base_freqs: [f32; VOICE_COUNT],
     /// Next voice to steal when all are busy (round-robin counter)
     next_voice: usize,
     /// Previous key states for edge detection (per octave)
@@ -101,37 +103,37 @@ impl KeyboardSynth {
         let pitch_bend = Shared::new(1.0);
         let resonator_freq = Shared::new(880.0);
         let net = Box::new(
-            (var(&freqs[0]) * var(&pitch_bend)
+            (var(&freqs[0])
                 >> (poly_saw::<f32>()
                     * (var(&gates[0])
                         >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                     * VOICE_GAIN)
-                | var(&freqs[1]) * var(&pitch_bend)
+                | var(&freqs[1])
                     >> (poly_saw::<f32>()
                         * (var(&gates[1])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[2]) * var(&pitch_bend)
+                | var(&freqs[2])
                     >> (poly_saw::<f32>()
                         * (var(&gates[2])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[3]) * var(&pitch_bend)
+                | var(&freqs[3])
                     >> (poly_saw::<f32>()
                         * (var(&gates[3])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[4]) * var(&pitch_bend)
+                | var(&freqs[4])
                     >> (poly_saw::<f32>()
                         * (var(&gates[4])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[5]) * var(&pitch_bend)
+                | var(&freqs[5])
                     >> (poly_saw::<f32>()
                         * (var(&gates[5])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
                         * VOICE_GAIN)
-                | var(&freqs[6]) * var(&pitch_bend)
+                | var(&freqs[6])
                     >> (poly_saw::<f32>()
                         * (var(&gates[6])
                             >> adsr_live(ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE))
@@ -147,6 +149,7 @@ impl KeyboardSynth {
             freqs,
             gates,
             voice_note: [VOICE_UNASSIGNED; VOICE_COUNT],
+            base_freqs: [0.0; VOICE_COUNT],
             next_voice: 0,
             key_states: [[false; KEY_COUNT]; OCTAVE_COUNT],
             pitch_bend,
@@ -209,8 +212,11 @@ impl KeyboardSynth {
     #[inline(always)]
     fn allocate_voice(&mut self, voice: usize, note: u8, key: usize, octave_mult: u8) {
         self.voice_note[voice] = note;
-        let freq = SEMITONE_FREQS[key] * octave_mult as f32;
-        self.freqs[voice].set_value(freq);
+        let base_freq = SEMITONE_FREQS[key] * octave_mult as f32;
+        self.base_freqs[voice] = base_freq;
+        // Apply current pitch bend
+        let bent_freq = base_freq * self.pitch_bend.value();
+        self.freqs[voice].set_value(bent_freq);
         self.gates[voice].set_value(1.0);
     }
 
@@ -220,15 +226,22 @@ impl KeyboardSynth {
         self.net.get_mono()
     }
 
-    /// Set pitch bend. Input range: -1.0 (1 semitone down) to 1.0 (1 semitone up).
+    /// Set pitch bend. Input range: -12.0 to 12.0 (semitones).
     /// Uses cheap linear approximation: ratio ≈ 1 + bend * ln(2)/12
     #[inline]
-    pub fn set_pitch_bend(&self, bend: f32) {
+    pub fn set_pitch_bend(&mut self, bend: f32) {
         assert!(bend >= -12.0 && bend <= 12.0, "Pitch bend out of range");
         // ln(2)/12 ≈ 0.05776, gives ~0.16% max error for ±1 semitone
         const BEND_FACTOR: f32 = 0.057762265;
         let ratio = 1.0 + bend * BEND_FACTOR;
         self.pitch_bend.set_value(ratio);
+        // Update all active voices with new pitch bend
+        for voice in 0..VOICE_COUNT {
+            if self.voice_note[voice] != VOICE_UNASSIGNED {
+                let bent_freq = self.base_freqs[voice] * ratio;
+                self.freqs[voice].set_value(bent_freq);
+            }
+        }
     }
 
     /// Get a clone of the pitch bend Shared for external control
